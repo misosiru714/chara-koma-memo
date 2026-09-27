@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>キャラこまメモ生成ツール</title>
+<style>
+:root{
+  --bg:#f5f3ef; --card:#ffffff; --text:#2b2b2b; --sub:#6b6b6b;
+  --accent:#7a5c8e; --border:#ddd6cf;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#1e1c22; --card:#2a2730; --text:#eee; --sub:#aaa;
+    --accent:#b899cf; --border:#443f4d;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#1e1c22; --card:#2a2730; --text:#eee; --sub:#aaa;
+  --accent:#b899cf; --border:#443f4d;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:"Hiragino Sans","Yu Gothic",sans-serif;
+  padding:env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0);
+}
+.wrap{max-width:640px;margin:0 auto;padding:24px 0 48px;}
+h1{font-size:1.2rem;margin-bottom:4px;}
+p.desc{color:var(--sub);font-size:0.85rem;margin-top:0;}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;}
+input[type=file]{width:100%;}
+label.toggle{display:flex;align-items:center;gap:8px;font-size:0.9rem;cursor:pointer;margin-top:10px;}
+textarea{
+  width:100%;min-height:320px;font-family:ui-monospace,monospace;font-size:0.9rem;
+  padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);
+  white-space:pre;
+}
+button{
+  background:var(--accent);color:#fff;border:none;border-radius:8px;
+  padding:10px 16px;font-size:0.9rem;cursor:pointer;margin-top:8px;
+}
+button:hover{opacity:0.9;}
+.status{font-size:0.8rem;color:var(--sub);margin-top:6px;min-height:1.2em;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>キャラこまメモ生成ツール</h1>
+  <p class="desc">DX3rd(ゆとシート形式)のキャラJSONを読み込んで、ココフォリアのキャラこまメモ用テキストを自動生成します。</p>
+
+  <div class="card">
+    <input type="file" id="fileInput" accept=".json,application/json">
+    <label class="toggle">
+      <input type="checkbox" id="rubyToggle">
+      ルビを表示する(例: 特異変質体《アンノウンネクサス》)
+    </label>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <textarea id="output" placeholder="ここに生成結果が表示されます。読み込み後は自由に編集できます。"></textarea>
+    <button id="copyBtn">コピー</button>
+    <span class="status" id="copyStatus"></span>
+  </div>
+</div>
+
+<script>
+let currentData = null;
+
+function decodeEntities(str){
+  if(!str) return "";
+  const ta = document.createElement("textarea");
+  ta.innerHTML = str;
+  return ta.value;
+}
+
+function processRuby(str, showRuby){
+  if(!str) return "";
+  return str.replace(/\|([^《]+)《([^》]+)》/g, (m, base, ruby) => {
+    return showRuby ? `${base}《${ruby}》` : base;
+  });
+}
+
+function formatName(raw, showRuby){
+  return processRuby(decodeEntities(raw), showRuby);
+}
+
+function generateMemo(data, showRuby){
+  const lines = [];
+
+  const codeName = data.aka ? `${formatName(data.aka, showRuby)}${data.akaRuby ? ` (${decodeEntities(data.akaRuby)})` : ""}` : "";
+
+  lines.push(`PC：${formatName(data.characterName, showRuby)}（${decodeEntities(data.characterNameRuby||"")}）`);
+  if(codeName) lines.push(`コードネーム: ${codeName}`);
+  lines.push(`PL：${decodeEntities(data.playerName||"")}`);
+  lines.push(`${decodeEntities(data.works||"")} / ${decodeEntities(data.cover||"")}`);
+  const syndromes = [data.syndrome1, data.syndrome2].filter(Boolean).map(s=>decodeEntities(s));
+  if(syndromes.length) lines.push(syndromes.join("、"));
+
+  // ロイス
+  const loisLines = [];
+  for(let i=1;i<=12;i++){
+    const name = data[`lois${i}Name`];
+    if(!name) continue;
+    const relation = data[`lois${i}Relation`] || "";
+    const dispName = formatName(name, showRuby);
+    if(relation === "Dロイス"){
+      loisLines.push(`${i}.D:${dispName}`);
+      continue;
+    }
+    const emoPosi = data[`lois${i}EmoPosi`];
+    const emoNega = data[`lois${i}EmoNega`];
+    const posiChecked = data[`lois${i}EmoPosiCheck`] === "1" || data[`lois${i}EmoPosiCheck`] === 1;
+    if(emoPosi || emoNega){
+      const posi = decodeEntities(emoPosi||"");
+      const nega = decodeEntities(emoNega||"");
+      const marked = posiChecked ? `⚪︎${posi}／${nega}` : `${posi}／⚪︎${nega}`;
+      loisLines.push(`${i}.${dispName}　${marked}`);
+    } else {
+      loisLines.push(`${i}.${dispName}`);
+    }
+  }
+  if(loisLines.length){
+    lines.push("");
+    lines.push("◆ロイス");
+    lines.push(...loisLines);
+  }
+
+  // アイテム
+  const itemLines = [];
+  for(let i=1;i<=20;i++){
+    const name = data[`item${i}Name`];
+    if(!name) continue;
+    itemLines.push(formatName(name, showRuby));
+  }
+  if(itemLines.length){
+    lines.push("");
+    lines.push("◆アイテム");
+    lines.push(...itemLines);
+  }
+
+  return lines.join("\n");
+}
+
+function render(){
+  if(!currentData) return;
+  const showRuby = document.getElementById("rubyToggle").checked;
+  document.getElementById("output").value = generateMemo(currentData, showRuby);
+}
+
+document.getElementById("fileInput").addEventListener("change", (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    try{
+      currentData = JSON.parse(ev.target.result);
+      render();
+      document.getElementById("status").textContent = `読み込み成功: ${file.name}`;
+    }catch(err){
+      document.getElementById("status").textContent = "JSONの読み込みに失敗しました。ファイル形式を確認してください。";
+    }
+  };
+  reader.onerror = ()=>{
+    document.getElementById("status").textContent = "ファイルの読み込みに失敗しました。";
+  };
+  reader.readAsText(file, "UTF-8");
+});
+
+document.getElementById("rubyToggle").addEventListener("change", render);
+
+document.getElementById("copyBtn").addEventListener("click", async ()=>{
+  const text = document.getElementById("output").value;
+  const statusEl = document.getElementById("copyStatus");
+  try{
+    await navigator.clipboard.writeText(text);
+    statusEl.textContent = "コピーしました";
+  }catch(err){
+    statusEl.textContent = "コピーに失敗しました(手動で選択してください)";
+  }
+  setTimeout(()=>{ statusEl.textContent = ""; }, 2000);
+});
+</script>
+</body>
+</html>
